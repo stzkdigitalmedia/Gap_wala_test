@@ -12,16 +12,16 @@
  */
 
 require('dotenv').config();
-const express  = require('express');
+const express = require('express');
 const mongoose = require('mongoose');
-const path     = require('path');
+const path = require('path');
 
-const authRoutes    = require('./src/routes/auth');
-const gameRoutes    = require('./src/routes/game');
+const authRoutes = require('./src/routes/auth');
+const gameRoutes = require('./src/routes/game');
 const webhookRoutes = require('./src/routes/webhook');
 
-const app  = express();
-const PORT = process.env.PORT || 5000;
+const app = express();
+const PORT = process.env.PORT || 5173;
 
 // ─── Raw body capture for RSA verification ────────────────────────────────────
 app.use(express.json({
@@ -35,8 +35,8 @@ mongoose.connect(MONGODB_URI)
   .catch(err => { console.error('❌ MongoDB connection failed:', err.message); process.exit(1); });
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
-app.use('/api/auth',          authRoutes);
-app.use('/api/game',          gameRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/game', gameRoutes);
 app.use('/api', webhookRoutes);
 
 // ─── Lobby Frontend ───────────────────────────────────────────────────────────
