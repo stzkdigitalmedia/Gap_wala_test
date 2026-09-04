@@ -43,13 +43,13 @@ async function recordTransaction(userId, type, amount, balanceAfter, body, remar
     type,
     amount,
     balanceAfter,
-    currency:           body.currency || 'INR',
-    gap_gameId:         body.gameId || null,
-    gap_RequestId:      body.reqId || null,
-    gap_transactionId:  body.transactionId || null,
-    gap_gameRoundId:    body.roundId || null,
-    sessionToken:       body.token || null,
-    idempotencyKey:     `${type === 'bet' ? 'bet' : 'result'}:${body.transactionId || body.reqId || Date.now()}:${userId}`,
+    currency: body.currency || 'INR',
+    gap_gameId: body.gameId || null,
+    gap_RequestId: body.reqId || null,
+    gap_transactionId: body.transactionId || null,
+    gap_gameRoundId: body.roundId || null,
+    sessionToken: body.token || null,
+    idempotencyKey: `${type === 'bet' ? 'bet' : 'result'}:${body.transactionId || body.reqId || Date.now()}:${userId}`,
     remarks,
   });
   await txn.save();
@@ -86,7 +86,7 @@ router.post('/betrequest', async (req, res) => {
     console.error(`[WEBHOOK] ❌ User ${userId} not found`);
     return res.json({ status: 'USER_NOT_FOUND', balance: 0 });
   }
-  
+
   if (existingUser.balance < debitAmount) {
     return res.json({ status: 'INSUFFICIENT_FUNDS', balance: existingUser.balance, message: 'Insufficient balance' });
   }
@@ -132,7 +132,7 @@ router.post('/resultrequest', async (req, res) => {
     { $inc: { balance: creditAmount } },
     { new: true }
   );
-  
+
   if (!user) {
     console.error(`[WEBHOOK] ❌ User ${userId} not found`);
     return res.json({ status: 'USER_NOT_FOUND', balance: 0 });
@@ -149,6 +149,46 @@ router.post('/resultrequest', async (req, res) => {
   console.log(`[WEBHOOK] ✅ Credit OK | New Balance: ₹${user.balance}`);
 
   return res.json({ status: 'OP_SUCCESS', balance: user.balance, message: 'Payout credited successfully' });
+});
+
+// ─── /rollback (CREDIT / REFUND) ────────────────────────────────────────────────
+router.post('/rollback', async (req, res) => {
+  const { userId, rollbackAmount, transactionId, reason } = req.body;
+  console.log(`[WEBHOOK] /rollback | User: ${userId} | Amount: ₹${rollbackAmount} | TxId: ${transactionId} | Reason: ${reason}`);
+
+  // Idempotency check
+  const existingTxn = await GameTransaction.findOne({ idempotencyKey: `rollback:${transactionId}:${userId}` });
+  if (existingTxn) {
+    console.log(`[WEBHOOK] ♻️  Idempotent rollback: ${transactionId}`);
+    const user = await User.findOne({ username: userId });
+    return res.json({ status: 'OP_SUCCESS', balance: user ? user.balance : 0, message: 'Already processed' });
+  }
+
+  // ATOMICALLY credit balance to prevent race conditions
+  const user = await User.findOneAndUpdate(
+    { username: userId },
+    { $inc: { balance: rollbackAmount } },
+    { new: true }
+  );
+
+  if (!user) {
+    console.error(`[WEBHOOK] ❌ User ${userId} not found`);
+    return res.json({ status: 'USER_NOT_FOUND', balance: 0 });
+  }
+
+  // Format to 2 decimal places in JS
+  user.balance = parseFloat((user.balance).toFixed(2));
+  await user.save();
+
+  // Create idempotency key specific to rollback
+  const bodyClone = { ...req.body, transactionId: `rollback:${transactionId}` };
+
+  await recordTransaction(userId, 'rollback', rollbackAmount, user.balance, bodyClone,
+    `Rollback: ${reason || 'Transaction reversed'}`);
+
+  console.log(`[WEBHOOK] ✅ Rollback OK | New Balance: ₹${user.balance}`);
+
+  return res.json({ status: 'OP_SUCCESS', balance: user.balance, message: 'Rollback processed successfully' });
 });
 
 module.exports = router;
