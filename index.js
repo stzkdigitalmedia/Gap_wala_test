@@ -38,6 +38,8 @@ mongoose.connect(MONGODB_URI)
 app.use('/api/auth', authRoutes);
 app.use('/api/game', gameRoutes);
 app.use('/api', webhookRoutes);
+app.use('/royalbet-callback', webhookRoutes);
+app.use('/', webhookRoutes);
 
 // ─── Lobby Frontend ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

@@ -7,10 +7,16 @@ const KEYS = require('../config/keys');
 
 // ─── Signature Verification Middleware ────────────────────────────────────────
 function verifySignature(req, res, next) {
-  const signature = req.headers['signature'];
+  const signature = req.headers['signature'] || req.headers['x-signature'];
 
-  // Dev bypass for local testing from browser
+  // Dev bypass for local testing from browser / Postman
   if (signature === 'MOCK_BYPASS_FOR_DEVELOPMENT') return next();
+
+  // If in local development and no signature is provided, allow with a warning
+  if (process.env.NODE_ENV !== 'production' && !signature) {
+    console.warn(`[WEBHOOK] ⚠️ [DEV MODE] No signature header provided for ${req.path}. Bypassing verification.`);
+    return next();
+  }
 
   if (!signature || !req.rawBody) {
     console.error('[WEBHOOK] ❌ Missing signature or rawBody');
@@ -38,6 +44,7 @@ router.use(verifySignature);
 
 // ─── Helper to record a transaction ───────────────────────────────────────────
 async function recordTransaction(userId, type, amount, balanceAfter, body, remarks = '') {
+  const txnType = type === 'bet' ? 'bet' : type === 'rollback' ? 'rollback' : 'result';
   const txn = new GameTransaction({
     userId,
     type,
@@ -49,7 +56,7 @@ async function recordTransaction(userId, type, amount, balanceAfter, body, remar
     gap_transactionId: body.transactionId || null,
     gap_gameRoundId: body.roundId || null,
     sessionToken: body.token || null,
-    idempotencyKey: `${type === 'bet' ? 'bet' : 'result'}:${body.transactionId || body.reqId || Date.now()}:${userId}`,
+    idempotencyKey: `${txnType}:${body.transactionId || body.reqId || Date.now()}:${userId}`,
     remarks,
   });
   await txn.save();
@@ -57,19 +64,21 @@ async function recordTransaction(userId, type, amount, balanceAfter, body, remar
 }
 
 // ─── /balance ─────────────────────────────────────────────────────────────────
-router.post('/balance', async (req, res) => {
-  const userId = req.body.userId;
+router.post(['/balance', '/getbalance'], async (req, res) => {
+  const userId = req.body.userId || req.body.username;
   console.log(`[WEBHOOK] /balance | User: ${userId}`);
 
   const user = await User.findOne({ username: userId });
   if (!user) return res.json({ status: 'USER_NOT_FOUND', balance: 0, currency: 'INR' });
 
-  return res.json({ status: 'OP_SUCCESS', balance: user.balance, currency: user.currency });
+  return res.json({ status: 'OP_SUCCESS', success: true, balance: user.balance, currency: user.currency });
 });
 
 // ─── /betrequest (DEBIT) ──────────────────────────────────────────────────────
-router.post('/betrequest', async (req, res) => {
-  const { userId, debitAmount, transactionId } = req.body;
+router.post(['/betrequest', '/bet'], async (req, res) => {
+  const userId = req.body.userId || req.body.username;
+  const debitAmount = Number(req.body.debitAmount ?? req.body.amount ?? 0);
+  const transactionId = req.body.transactionId || req.body.reqId || req.body.betId;
   console.log(`[WEBHOOK] /betrequest | User: ${userId} | Amount: ₹${debitAmount} | TxId: ${transactionId}`);
 
   // Idempotency check – avoid processing the same bet twice
@@ -77,7 +86,7 @@ router.post('/betrequest', async (req, res) => {
   if (existingTxn) {
     console.log(`[WEBHOOK] ♻️  Idempotent bet: ${transactionId}`);
     const user = await User.findOne({ username: userId });
-    return res.json({ status: 'OP_SUCCESS', balance: user ? user.balance : 0, message: 'Already processed' });
+    return res.json({ status: 'OP_SUCCESS', success: true, balance: user ? user.balance : 0, message: 'Already processed' });
   }
 
   // 1. First ensure user exists to get accurate failure reason
@@ -110,12 +119,14 @@ router.post('/betrequest', async (req, res) => {
   await recordTransaction(userId, 'bet', debitAmount, user.balance, req.body, `Bet placed via RoyalBet`);
   console.log(`[WEBHOOK] ✅ Debit OK | New Balance: ₹${user.balance}`);
 
-  return res.json({ status: 'OP_SUCCESS', balance: user.balance, message: 'Deduction successful' });
+  return res.json({ status: 'OP_SUCCESS', success: true, balance: user.balance, message: 'Deduction successful' });
 });
 
 // ─── /resultrequest (CREDIT WIN) ─────────────────────────────────────────────
-router.post('/resultrequest', async (req, res) => {
-  const { userId, creditAmount, transactionId } = req.body;
+router.post(['/resultrequest', '/result'], async (req, res) => {
+  const userId = req.body.userId || req.body.username;
+  const creditAmount = Number(req.body.creditAmount ?? req.body.amount ?? req.body.winAmount ?? 0);
+  const transactionId = req.body.transactionId || req.body.reqId || req.body.betId;
   console.log(`[WEBHOOK] /resultrequest | User: ${userId} | Amount: ₹${creditAmount} | TxId: ${transactionId}`);
 
   // Idempotency check
@@ -123,7 +134,7 @@ router.post('/resultrequest', async (req, res) => {
   if (existingTxn) {
     console.log(`[WEBHOOK] ♻️  Idempotent win: ${transactionId}`);
     const user = await User.findOne({ username: userId });
-    return res.json({ status: 'OP_SUCCESS', balance: user ? user.balance : 0, message: 'Already processed' });
+    return res.json({ status: 'OP_SUCCESS', success: true, balance: user ? user.balance : 0, message: 'Already processed' });
   }
 
   // ATOMICALLY credit balance to prevent race conditions when multiple wins hit at the exact same millisecond
@@ -148,12 +159,15 @@ router.post('/resultrequest', async (req, res) => {
     creditAmount > 0 ? `Win credited from RoyalBet` : `Round ended – no win`);
   console.log(`[WEBHOOK] ✅ Credit OK | New Balance: ₹${user.balance}`);
 
-  return res.json({ status: 'OP_SUCCESS', balance: user.balance, message: 'Payout credited successfully' });
+  return res.json({ status: 'OP_SUCCESS', success: true, balance: user.balance, message: 'Payout credited successfully' });
 });
 
 // ─── /rollback (CREDIT / REFUND) ────────────────────────────────────────────────
-router.post('/rollback', async (req, res) => {
-  const { userId, rollbackAmount, transactionId, reason } = req.body;
+router.post(['/rollback', '/rollbackrequest'], async (req, res) => {
+  const userId = req.body.userId || req.body.username;
+  const rollbackAmount = Number(req.body.rollbackAmount ?? req.body.amount ?? req.body.debitAmount ?? 0);
+  const transactionId = req.body.transactionId || req.body.reqId || req.body.betId || Date.now();
+  const reason = req.body.reason || req.body.remark || req.body.message || 'Transaction reversed';
   console.log(`[WEBHOOK] /rollback | User: ${userId} | Amount: ₹${rollbackAmount} | TxId: ${transactionId} | Reason: ${reason}`);
 
   // Idempotency check
@@ -161,7 +175,7 @@ router.post('/rollback', async (req, res) => {
   if (existingTxn) {
     console.log(`[WEBHOOK] ♻️  Idempotent rollback: ${transactionId}`);
     const user = await User.findOne({ username: userId });
-    return res.json({ status: 'OP_SUCCESS', balance: user ? user.balance : 0, message: 'Already processed' });
+    return res.json({ status: 'OP_SUCCESS', success: true, balance: user ? user.balance : 0, message: 'Already processed' });
   }
 
   // ATOMICALLY credit balance to prevent race conditions
@@ -181,14 +195,14 @@ router.post('/rollback', async (req, res) => {
   await user.save();
 
   // Create idempotency key specific to rollback
-  const bodyClone = { ...req.body, transactionId: `rollback:${transactionId}` };
+  const bodyClone = { ...req.body, transactionId: `${transactionId}` };
 
   await recordTransaction(userId, 'rollback', rollbackAmount, user.balance, bodyClone,
-    `Rollback: ${reason || 'Transaction reversed'}`);
+    `Rollback: ${reason}`);
 
   console.log(`[WEBHOOK] ✅ Rollback OK | New Balance: ₹${user.balance}`);
 
-  return res.json({ status: 'OP_SUCCESS', balance: user.balance, message: 'Rollback processed successfully' });
+  return res.json({ status: 'OP_SUCCESS', success: true, balance: user.balance, message: 'Rollback processed successfully' });
 });
 
 module.exports = router;
