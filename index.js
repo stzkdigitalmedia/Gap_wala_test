@@ -21,7 +21,7 @@ const gameRoutes = require('./src/routes/game');
 const webhookRoutes = require('./src/routes/webhook');
 
 const app = express();
-const PORT = process.env.PORT || 5173;
+const PORT = process.env.PORT || 3000;
 
 // ─── Raw body capture for RSA verification ────────────────────────────────────
 app.use(express.json({
