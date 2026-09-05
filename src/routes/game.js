@@ -26,7 +26,7 @@ router.post('/launch', auth, async (req, res) => {
 
   const payload = {
     operatorId: OPERATOR_ID,
-    userId: user.username,        // Stable external user ID
+    userId: user._id,        // Stable external user ID
     username: user.username,
     balance: user.balance,
     currency: user.currency,
