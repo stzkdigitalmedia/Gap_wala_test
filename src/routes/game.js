@@ -24,6 +24,8 @@ router.post('/launch', auth, async (req, res) => {
   const gameId = req.body.gameId || 'royalbet-elevator';
   const targetApiUrl = gameId === 'ludo-classic' ? 'http://localhost:8080' : ROYALBET_API_URL;
 
+
+  // console.log(user, '-----user')
   const payload = {
     operatorId: OPERATOR_ID,
     userId: user._id,        // Stable external user ID

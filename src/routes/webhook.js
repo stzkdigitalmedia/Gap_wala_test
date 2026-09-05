@@ -76,7 +76,7 @@ router.post(['/balance', '/getbalance'], async (req, res) => {
 
 // ─── /betrequest (DEBIT) ──────────────────────────────────────────────────────
 router.post(['/betrequest', '/bet'], async (req, res) => {
-  const userId = req.body.userId || req.body.username;
+  const userId = req.body.userId
   const debitAmount = Number(req.body.debitAmount ?? req.body.amount ?? 0);
   const transactionId = req.body.transactionId || req.body.reqId || req.body.betId;
   console.log(`[WEBHOOK] /betrequest | User: ${userId} | Amount: ₹${debitAmount} | TxId: ${transactionId}`);
@@ -85,12 +85,12 @@ router.post(['/betrequest', '/bet'], async (req, res) => {
   const existingTxn = await GameTransaction.findOne({ idempotencyKey: `bet:${transactionId}:${userId}` });
   if (existingTxn) {
     console.log(`[WEBHOOK] ♻️  Idempotent bet: ${transactionId}`);
-    const user = await User.findOne({ username: userId });
+    const user = await User.findOne({ _id: userId });
     return res.json({ status: 'OP_SUCCESS', success: true, balance: user ? user.balance : 0, message: 'Already processed' });
   }
 
   // 1. First ensure user exists to get accurate failure reason
-  const existingUser = await User.findOne({ username: userId });
+  const existingUser = await User.findOne({ _id: userId });
   if (!existingUser) {
     console.error(`[WEBHOOK] ❌ User ${userId} not found`);
     return res.json({ status: 'USER_NOT_FOUND', balance: 0 });
@@ -102,7 +102,7 @@ router.post(['/betrequest', '/bet'], async (req, res) => {
 
   // 2. ATOMICALLY deduct balance to prevent race conditions during rapid simultaneous bets
   const user = await User.findOneAndUpdate(
-    { username: userId, balance: { $gte: debitAmount } },
+    { _id: userId, balance: { $gte: debitAmount } },
     { $inc: { balance: -debitAmount } },
     { new: true } // Return the updated document
   );
@@ -139,7 +139,9 @@ router.post(['/resultrequest', '/result'], async (req, res) => {
 
   // ATOMICALLY credit balance to prevent race conditions when multiple wins hit at the exact same millisecond
   const user = await User.findOneAndUpdate(
-    { username: userId },
+    {
+      _id: userId
+    },
     { $inc: { balance: creditAmount } },
     { new: true }
   );
@@ -174,13 +176,15 @@ router.post(['/rollback', '/rollbackrequest'], async (req, res) => {
   const existingTxn = await GameTransaction.findOne({ idempotencyKey: `rollback:${transactionId}:${userId}` });
   if (existingTxn) {
     console.log(`[WEBHOOK] ♻️  Idempotent rollback: ${transactionId}`);
-    const user = await User.findOne({ username: userId });
+    const user = await User.findOne({ _id: userId });
     return res.json({ status: 'OP_SUCCESS', success: true, balance: user ? user.balance : 0, message: 'Already processed' });
   }
 
   // ATOMICALLY credit balance to prevent race conditions
   const user = await User.findOneAndUpdate(
-    { username: userId },
+    {
+      _id: userId
+    },
     { $inc: { balance: rollbackAmount } },
     { new: true }
   );
